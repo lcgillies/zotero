@@ -54,7 +54,7 @@ COLLECTIONS = {
 
 CONFIDENCE_THRESHOLD = 0.85   # Below this → ambiguous, goes to review CSV
 BATCH_SIZE = 50                # Items per API call to Claude
-RATE_LIMIT_PAUSE = 0.25        # Seconds between Zotero write calls
+RATE_LIMIT_PAUSE = 0.6         # Seconds between Zotero write calls (web API: ~100 req/min)
 
 AMBIGUOUS_CSV = f"ambiguous_items_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
 
@@ -113,7 +113,7 @@ def assign_collection(item_key: str, version: int, collection_key: str, dry_run:
     if dry_run:
         return
     payload = {"collections": [collection_key]}
-    zotero_patch(f"/users/0/items/{item_key}", payload, version)
+    zotero_patch(f"/items/{item_key}", payload, version)
     time.sleep(RATE_LIMIT_PAUSE)
 
 
