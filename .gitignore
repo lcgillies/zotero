@@ -1,0 +1,5 @@
+anthropic.env
+zotero.env
+*.env
+ambiguous_items_*.csv
+.claude/
