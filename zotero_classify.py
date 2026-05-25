@@ -35,8 +35,11 @@ import requests
 # Configuration
 # ---------------------------------------------------------------------------
 
-ZOTERO_BASE = "http://localhost:23119/api"          # Zotero local HTTP API
-ZOTERO_HEADERS = {"Zotero-API-Version": "3"}
+ZOTERO_READ_BASE  = "http://localhost:23119/api"    # local API for reads (fast)
+ZOTERO_WRITE_BASE = "https://api.zotero.org"        # web API for writes
+ZOTERO_USER_ID    = "11346380"
+ZOTERO_API_KEY    = os.environ.get("ZOTERO_API_KEY", "")
+ZOTERO_HEADERS    = {"Zotero-API-Version": "3"}
 
 COLLECTIONS = {
     "20th-Century Political History":           "7GG9T82M",
@@ -51,7 +54,7 @@ COLLECTIONS = {
 
 CONFIDENCE_THRESHOLD = 0.85   # Below this → ambiguous, goes to review CSV
 BATCH_SIZE = 50                # Items per API call to Claude
-RATE_LIMIT_PAUSE = 0.25        # Seconds between Zotero write calls
+RATE_LIMIT_PAUSE = 0.6         # Seconds between Zotero write calls (web API: ~100 req/min)
 
 AMBIGUOUS_CSV = f"ambiguous_items_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
 
@@ -60,15 +63,19 @@ AMBIGUOUS_CSV = f"ambiguous_items_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv
 # ---------------------------------------------------------------------------
 
 def zotero_get(path: str, params: dict = None) -> dict | list:
-    url = f"{ZOTERO_BASE}{path}"
+    url = f"{ZOTERO_READ_BASE}{path}"
     r = requests.get(url, headers=ZOTERO_HEADERS, params=params or {})
     r.raise_for_status()
     return r.json()
 
 
 def zotero_patch(path: str, payload: dict, version: int) -> None:
-    url = f"{ZOTERO_BASE}{path}"
-    headers = {**ZOTERO_HEADERS, "If-Unmodified-Since-Version": str(version)}
+    url = f"{ZOTERO_WRITE_BASE}/users/{ZOTERO_USER_ID}{path}"
+    headers = {
+        **ZOTERO_HEADERS,
+        "If-Unmodified-Since-Version": str(version),
+        "Zotero-API-Key": ZOTERO_API_KEY,
+    }
     r = requests.patch(url, headers=headers, json=payload)
     r.raise_for_status()
 
@@ -86,7 +93,7 @@ def fetch_unfiled_items(limit: int | None = None) -> list[dict]:
             "start": start,
             "limit": page_size,
         }
-        page = zotero_get("/users/0/items/unfiled", params)
+        page = zotero_get("/users/0/items", {**params, "collectionID": "unfiled"})
         if not page:
             break
         items.extend(page)
@@ -106,7 +113,7 @@ def assign_collection(item_key: str, version: int, collection_key: str, dry_run:
     if dry_run:
         return
     payload = {"collections": [collection_key]}
-    zotero_patch(f"/users/0/items/{item_key}", payload, version)
+    zotero_patch(f"/items/{item_key}", payload, version)
     time.sleep(RATE_LIMIT_PAUSE)
 
 
@@ -169,7 +176,7 @@ def classify_batch(client: anthropic.Anthropic, batch: list[dict]) -> list[dict]
     """Send a batch to Claude Haiku and return parsed results."""
     message = client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=1024,
+        max_tokens=4096,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": build_user_message(batch)}],
     )
@@ -190,6 +197,8 @@ def run(dry_run: bool, limit: int | None):
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         sys.exit("ERROR: ANTHROPIC_API_KEY environment variable not set.")
+    if not dry_run and not ZOTERO_API_KEY:
+        sys.exit("ERROR: ZOTERO_API_KEY environment variable not set (required for live runs).")
 
     client = anthropic.Anthropic(api_key=api_key)
     items = fetch_unfiled_items(limit)
